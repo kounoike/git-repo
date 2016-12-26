@@ -507,7 +507,10 @@ class GitRepoRunner(KeywordArgumentParser):
             username = loop_input('username> ')
             password = loop_input('password> ', method=getpass)
 
+            user = None
             token = service.get_auth_token(username, password, prompt=loop_input)
+            if isinstance(token, tuple):
+                token, user = token
             print('Great! You\'ve been identified 🍻')
 
             print('Do you want to give a custom name for this service\'s remote?')
@@ -522,7 +525,10 @@ class GitRepoRunner(KeywordArgumentParser):
             else:
                 set_alias = True
 
-            service.store_config(self.config, token=token)
+            if user:
+                service.store_config(self.config, token=token, username=user)
+            else:
+                service.store_config(self.config, token=token)
             if set_alias:
                 service.set_alias(self.config)
 
