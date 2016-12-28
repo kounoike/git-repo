@@ -3,7 +3,7 @@
 import logging
 log = logging.getLogger('git_repo.bitbucket')
 
-from ..service import register_target, RepositoryService
+from ..service import register_target, RepositoryService, ProgressBar
 from ...exceptions import ResourceError, ResourceExistsError, ResourceNotFoundError
 
 from pybitbucket.bitbucket import Client, Bitbucket
@@ -18,6 +18,9 @@ from pybitbucket.user import User
 
 from requests import Request, Session
 from requests.exceptions import HTTPError
+
+from git.exc import GitCommandError
+
 from lxml import html
 import os, json, platform
 
@@ -314,43 +317,36 @@ class BitbucketService(RepositoryService):
                 log.warn('Error while fetching request information: {}'.format(pull))
 
     def request_fetch(self, user, repo, request, pull=False):
-        log.warn('Bitbucket does not support fetching of PR using git. Use this command at your own risk.')
-        if 'y' not in input('Are you sure to continue? [yN]> '):
-            raise ResourceError('Command aborted.')
         if pull:
             raise NotImplementedError('Pull operation on requests for merge are not yet supported')
+
+        pb = ProgressBar()
+        pb.setup(self.name)
+
         try:
-            repository = self.get_repository(user, repo)
-            if self.repository.is_dirty():
-                raise ResourceError('Please use this command after stashing your changes.')
             local_branch_name = 'requests/bitbucket/{}'.format(request)
-            index = self.repository.index
-            log.info('» Fetching pull request {}'.format(request))
-            request = next(bb.repositoryPullRequestByPullRequestId(
+            pr = next(self.bb.repositoryPullRequestByPullRequestId(
                 owner=user,
                 repository_name=repo,
                 pullrequest_id=request
             ))
-            commit = self.repository.rev_parse(request['destination']['commit']['hash'])
-            self.repository.head.reference = commit
-            log.info('» Creation of requests branch {}'.format(local_branch_name))
-            # create new branch
-            head = self.repository.create_head(local_branch_name)
-            head.checkout()
-            # fetch and apply patch
-            log.info('» Fetching and writing the patch in current directory')
-            patch = bb.client.session.get(request['links']['diff']['href']).content.decode('utf-8')
-            with open('.tmp.patch', 'w') as f:
-                f.write(patch)
-            log.info('» Applying the patch')
-            git.cmd.Git().apply('.tmp.patch', stat=True)
-            os.unlink('.tmp.patch')
-            log.info('» Going back to original branch')
-            index.checkout() # back to former branch
+            source_branch = pr.source['branch']['name']
+            source_slug = pr.source['repository']['full_name']
+            source_url = pr.source['repository']['links']['html']['href']
+            remote_name = 'requests/bitbucket/{}'.format(source_slug).replace('/', '-')
+            try:
+                remote = self.repository.remote(name=remote_name)
+            except ValueError:
+                remote = self.repository.create_remote(name=remote_name, url=source_url)
+            refspec = '{}:{}'.format(source_branch, local_branch_name)
+            refs = remote.fetch(refspec, progress=pb)
+            for branch in self.repository.branches:
+                if branch.name == local_branch_name:
+                    branch.set_tracking_branch(remote.refs[0])
             return local_branch_name
         except HTTPError as err:
             if '404' in err.args[0].split(' '):
-                raise ResourceNotFoundError("Could not find snippet {}.".format(gist_id)) from err
+                raise ResourceNotFoundError('Could not find opened request #{}'.format(request)) from err
             raise ResourceError("Couldn't delete snippet: {}".format(err)) from err
         except GitCommandError as err:
             if 'Error when fetching: fatal: ' in err.command[0]:
