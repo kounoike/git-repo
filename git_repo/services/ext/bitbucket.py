@@ -5,6 +5,7 @@ log = logging.getLogger('git_repo.bitbucket')
 
 from ..service import register_target, RepositoryService, ProgressBar
 from ...exceptions import ResourceError, ResourceExistsError, ResourceNotFoundError
+from ...tools import columnize
 
 from pybitbucket.bitbucket import Client, Bitbucket
 from pybitbucket.auth import BasicAuthenticator
@@ -95,28 +96,6 @@ class BitbucketService(RepositoryService):
             raise ResourceError("Couldn't complete deletion: {}".format(err)) from err
 
     def list(self, user, _long=False):
-        import shutil, sys
-        from datetime import datetime
-        term_width = shutil.get_terminal_size((80, 20)).columns
-        def col_print(lines, indent=0, pad=2):
-            # prints a list of items in a fashion similar to the dir command
-            # borrowed from https://gist.github.com/critiqjo/2ca84db26daaeb1715e1
-            n_lines = len(lines)
-            if n_lines == 0:
-                return
-            col_width = max(len(line) for line in lines)
-            n_cols = int((term_width + pad - indent)/(col_width + pad))
-            n_cols = min(n_lines, max(1, n_cols))
-            col_len = int(n_lines/n_cols) + (0 if n_lines % n_cols == 0 else 1)
-            if (n_cols - 1) * col_len >= n_lines:
-                n_cols -= 1
-            cols = [lines[i*col_len : i*col_len + col_len] for i in range(n_cols)]
-            rows = list(zip(*cols))
-            rows_missed = zip(*[col[len(rows):] for col in cols[:-1]])
-            rows.extend(rows_missed)
-            for row in rows:
-                print(" "*indent + (" "*pad).join(line.ljust(col_width) for line in row))
-
         try:
             user = User.find_user_by_username(user)
         except HTTPError as err:
@@ -124,10 +103,13 @@ class BitbucketService(RepositoryService):
 
         repositories = user.repositories()
         if not _long:
-            repositories = list(repositories)
-            col_print(["/".join([user.username, repo.name]) for repo in repositories])
+            repositories = list(["/".join([user.username, repo.name]) for repo in repositories])
+            yield "{}"
+            yield "Total repositories: {}".format(len(repositories))
+            yield from columnize(repositories)
         else:
-            print('Status\tCommits\tReqs\tIssues\tForks\tCoders\tWatch\tLikes\tLang\tModif\t\tName', file=sys.stderr)
+            yield "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t\t{}"
+            yield ['Status', 'Commits', 'Reqs', 'Issues', 'Forks', 'Coders', 'Watch', 'Likes', 'Lang', 'Modif', 'Name']
             for repo in repositories:
                 # if repo.updated_at.year < datetime.now().year:
                 #     date_fmt = "%b %d %Y"
@@ -138,22 +120,22 @@ class BitbucketService(RepositoryService):
                     'F' if getattr(repo, 'parent', None) else ' ',               # is a fork?
                     'P' if repo.is_private else ' ',            # is private?
                 ])
-                print('\t'.join([
+                yield [
                     # status
                     status,
                     # stats
-                    str(len(list(repo.commits()))),          # number of commits
-                    str(len(list(repo.pullrequests()))),            # number of pulls
-                    str('N.A.'),           # number of issues
-                    str(len(list(repo.forks()))),                              # number of forks
-                    str('N.A.'),     # number of contributors
-                    str(len(list(repo.watchers()))),                           # number of subscribers
-                    str('N.A.'),                    # number of ♥
+                    str(len(list(repo.commits()))),       # number of commits
+                    str(len(list(repo.pullrequests()))),  # number of pulls
+                    str('N.A.'),                          # number of issues
+                    str(len(list(repo.forks()))),         # number of forks
+                    str('N.A.'),                          # number of contributors
+                    str(len(list(repo.watchers()))),      # number of subscribers
+                    str('N.A.'),                          # number of ♥
                     # info
-                    repo.language or '?',                      # language
-                    repo.updated_on,      # date
-                    '/'.join([user.username, repo.name]),             # name
-                ]))
+                    repo.language or '?',                 # language
+                    repo.updated_on,                      # date
+                    '/'.join([user.username, repo.name]), # name
+                ]
 
     def get_repository(self, user, repo):
         try:
@@ -296,7 +278,8 @@ class BitbucketService(RepositoryService):
                 raise ResourceNotFoundError("Couldn't create request, branch not found: {}".format(local_branch)) from err
             raise ResourceError("Couldn't create request: {}".format(err)) from err
 
-        return {'local': local_branch, 'remote': remote_branch, 'ref': str(request.id)}
+        return {'local': local_branch, 'remote': remote_branch,
+                'ref': str(request.id), 'url': request.links['html']['href']}
 
     def request_list(self, user, repo):
         requests = set(
