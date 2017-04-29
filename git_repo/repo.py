@@ -163,15 +163,16 @@ class GitRepoRunner(KeywordArgumentParser):
         for remote in repository.remotes:
             if remote.name in targets:
                 for url in remote.urls:
-                    if url.startswith('https'):
-                        if url.endswith('.git'):
-                            url = url[:-4]
+                    if url.endswith('.git'):
+                        url = url[:-4]
+                    if url.startswith('https') or url.startswith('http'):
                         *_, user, name = url.split('/')
                         self.set_repo_slug('/'.join([user, name]))
                         return
+                    elif url.startswith('ssh://'):
+                        *_, user, name = url.split('/')
+                        self.set_repo_slug('/'.join([user, name]))
                     elif url.startswith('git@'):
-                        if url.endswith('.git'):
-                            url = url[:-4]
                         _, repo_slug = url.split(':')
                         self.set_repo_slug(repo_slug)
                         return
